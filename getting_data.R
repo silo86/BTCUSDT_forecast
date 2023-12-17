@@ -1,15 +1,22 @@
+#install.packages("reticulate")
+#install.packages("tseries")
+#install.packages("httr2")
+#library(httr2)
+#install.packages("pracma")
+#install.packages('prophet')
+
 library(httr)
 library(jsonlite)
 library(corrr)
 library(plotly)
-#install.packages("tseries")
+library(reticulate)
+py_config()
 library(tseries)
-#install.packages("httr2")
-#library(httr2)
-#install.packages("pracma")
 library(pracma)
-# Load the required library for setnames function
 library(data.table)
+library(prophet)
+
+pdf("output_plot.pdf")
 
 #Column 1 (Timestamp): Unix timestamp or time in milliseconds (Time at the start of the interval).
 #Column 2 (Open): Opening price at the beginning of the interval.
@@ -74,16 +81,16 @@ variables_numericas%>%
 
 
 
-# Create a candlestick chart
+# Crea un candlestick chart
 candlestick <- plot_ly(df, type = "candlestick", x = ~timestamp, open = ~open, high = ~high, low = ~low, close = ~close)
 
-# Customize the chart layout 
+# Customiza el layout 
 candlestick <- candlestick %>% layout(title = "Candlestick Chart", xaxis = list(title = "Date"), yaxis = list(title = "Price"))
 
-# Show the chart
+# Muestra el chart
 candlestick
 
-#Perform a Dickey-Fuller test to evaluate stationary
+# Corremos el test Dickey-Fuller para evaluar stationary
 df$timestamp <- as.POSIXct(df$timestamp)
 close_prices <- data$close
 close_time_series <- ts(close_prices)
@@ -91,44 +98,51 @@ result <- adf.test(close_time_series)
 print(result)
 
 # p-value is greater that 0.05 hence we fail to reject the null hyphotesis. The time series is non-stationary
-
+# El p-valor es mayor que 0.05 por lo tanto falla en rechazar la hipotesis nula. La serie de tiempo es no estacionaria
 
 
 data$close <- as.numeric(data$close)
 # Calculate the first differences of the 'Close' column
-#diff_close <- diff(data$close)
+# Calculamos la primera diferencia de la serie
+
 diff_close <- c(NA, diff(data$close))
-# Remove any NA values resulting from differencing
+
+# Removemos NAs
 diff_close_no_na <- diff_close[!is.na(diff_close)]
-#
+# Aplicamos nuevamente el test de Dickey-Fuller
 result <- adf.test(diff_close_no_na)
 print(result)
+
 # we got a p-value of 0.01 so we can reject the null hyphotesis and conclude that the time series is now stationary
 # Therefore, it is necessary to model the first difference of the series:
+# Obtenemos un p-valor de 0.01 por lo que rechazamos la hipotesis nula y concluimos que la serie de tiempo es ahora estacionaria
+# Por lo tanto, es necesario modelar la primera diferencia de la serie
 data$diff_close <- diff_close
 
 
-#### Decomposition
-#The stl() function performs decomposition of the time series data into seasonal, trend, and remainder components using a seasonal-trend decomposition procedure based on Loess.
-#The s.window = "periodic" argument specifies that a periodic window should be used for the seasonal component.
-# Convert 'close' column to numeric
+#### Decomposicion 
+#La función stl() realiza la descomposición de los datos de series temporales en componentes estacionales, de tendencia y residuales utilizando un procedimiento de descomposición estacional basado en Loess.
+
+#El argumento s.window = "periodic" especifica que se debe usar una ventana periódica para la componente estacional.
+
+#Convertimos la columna 'close' a numérica.
 data$close <- as.numeric(as.character(data$close))
 
 data$close <- as.ts(df$close)
 
-# Plot the time series
+# graficamos la serie
 plot(data$close)
 
 
 
 seasonal_decompose <- function(data_column, frequency = 12) {
-  # Convert the column to a time series
+  # Convertir la columna a una serie temporal.
   ts_data <- ts(data_column, frequency = frequency)
   
-  # Apply seasonal decomposition
+  # Aplicar descomposición estacional.
   decomposed_data <- stl(ts_data, s.window = "periodic")
   
-  # Access the decomposed components
+  # Acceder a los componentes descompuestos.
   seasonal <- decomposed_data$time.series[, "seasonal"]
   trend <- decomposed_data$time.series[, "trend"]
   remainder <- decomposed_data$time.series[, "remainder"]
@@ -140,42 +154,32 @@ seasonal_decompose <- function(data_column, frequency = 12) {
   # Establecer un diseño de gráficos en 3 filas y 1 columna
   par(mfrow = c(4, 1))
   
-  # Plot the original serie
+  # Graficar la serie original.
   plot(data_column)
-  # Plot the decomposed components
+  
+  # Graficar los componentes
   plot(decomposed_data$time.series[, "seasonal"], main = "Componente Estacional")
   plot(decomposed_data$time.series[, "trend"], main = "Componente de Tendencia")
   plot(decomposed_data$time.series[, "remainder"], main = "Componente de Residuo")
 }
 
-#call the function for the complete close
+#Llamamos a la funcion para toda la serie
 seasonal_decompose(data$close, frequency = 7)  
 
-# call the function for the last month
+# Llamamos a la funcion para el ultimo mes
 last_month_close<- tail(data$close, 30)
 
 seasonal_decompose(last_month_close, frequency = 7) 
 
-#There is a weekly seasonality, but its contribution is very small, so it can be neglected.
+#Hay una estacionalidad semanal, pero su contribución es muy pequeña, por lo que se puede ignorar.
 
-#####FE with tsfeatures
 
-#install.packages('tsfeatures', dependencies = TRUE)
-#install.packages("devtools")
-#devtools::install_github("robjhyndman/tsfeatures")
-#library(tsfeatures)
-#mylist <- list(data$close,data$diff_close)
-#myfeatures <- tsfeatures(mylist)
-#myfeatures
-
-#agregar algo de FE o shadow price upper and lower(ver notebook guia)
-
-##### 4.5. Get target, training, validation and test datasets for ML models¶
+# Separamos en train, validation y test
 
 get_train_valid_test_ts <- function(df, forecasting_days, target = "close") {
-  # Get training, validation, and test datasets with target for Time Series models
+  # Obtener los conjuntos de datos de entrenamiento, validación y prueba con el target para la serie temporal
   
-  # Data preparing
+  # Preparacion de los datos
   df <- na.omit(df)
   df <- df[, c("timestamp", "close")]
   names(df) <- c("ds", "y")
@@ -185,59 +189,30 @@ get_train_valid_test_ts <- function(df, forecasting_days, target = "close") {
   valid <- df[(N - 2 * forecasting_days):(N - forecasting_days - 1), ]
   test <- df[(N - forecasting_days):N, ]
   
-  # Train+valid - for optimal model training
+  # Train+valid - para entrenamiento del modelo final
   train_valid <- rbind(train, valid)
   
-  cat(sprintf("Origin dataset has %d rows and %d features\n", nrow(df), ncol(df)))
-  cat(sprintf("Get training dataset with %d rows\n", nrow(train)))
-  cat(sprintf("Get validation dataset with %d rows\n", nrow(valid)))
-  cat(sprintf("Get test dataset with %d rows\n", nrow(test)))
+  cat(sprintf("El dataset original tiene %d registros y %d features\n", nrow(df), ncol(df)))
+  cat(sprintf("El dataset de entrenamiento cuenta con %d registros\n", nrow(train)))
+  cat(sprintf("El dataset de validacion cuenta con %d registros\n", nrow(valid)))
+  cat(sprintf("El dataset de pruebas cuenta con %d registros\n", nrow(test)))
   
   return(list(train = train, valid = valid, test = test, train_valid = train_valid))
 }
 
 forecasting_days <- 10
-result <- get_train_valid_test_ts(data, forecasting_days)
+data <- get_train_valid_test_ts(data, forecasting_days)
 
-# Access the resulting data frames
-train <- result$train
-valid <- result$valid
-test <- result$test
-train_valid <- result$train_valid
-
-
-
-
-
-#### ARIMA
-# ARIMA stands for Autoregressive Integrated Moving Average Model. It belongs to a class of models that explains a given time series based on its own past values -i.e.- its own lags and the lagged forecast errors. The equation can be used to forecast future values. Any ‘non-seasonal’ time series that exhibits patterns and is not a random white noise can be modeled with ARIMA models. So, ARIMA, short for AutoRegressive Integrated Moving Average, is a forecasting algorithm based on the idea that the information in the past values of the time series can alone be used to predict the future values. ARIMA Models are specified by three order parameters: (p, d, q),
-# where,
-# p is the order of the AR term
-# d is the number of differencing required to make the time series stationary
-# q is the order of the MA term
-# AR(p) Autoregression – a regression model that utilizes the dependent relationship between a current observation and observations over a previous period. An auto regressive (AR(p)) component refers to the use of past values in the regression equation for the time series.
-# I(d) Integration – uses differencing of observations (subtracting an observation from observation at the previous time step) in order to make the time series stationary. Differencing involves the subtraction of the current values of a series with its previous values d number of times.
-# MA(q) Moving Average – a model that uses the dependency between an observation and a residual error from a moving average model applied to lagged observations. A moving average component depicts the error of the model as a combination of previous error terms. The order q represents the number of terms to be included in the model.
-
-#
-# 5.2.1 How to find the order of differencing (d) in ARIMA model 
-# 
-# As stated earlier, the purpose of differencing is to make the time series stationary. But we should be careful to not over-difference the series. An over differenced series may still be stationary, which in turn will affect the model parameters.
-# So we should determine the right order of differencing. The right order of differencing is the minimum differencing required to get a near-stationary series which roams around a defined mean and the ACF plot reaches to zero fairly quick.
-# If the autocorrelations are positive for many number of lags (10 or more), then the series needs further differencing. On the other hand, if the lag 1 autocorrelation itself is too negative, then the series is probably over-differenced.
-# If we can’t really decide between two orders of differencing, then we go with the order that gives the least standard deviation in the differenced series.
-# Now, we will explain these concepts with the help of an example as follows:
-#   First, I will check if the series is stationary using the Augmented Dickey Fuller test (ADF Test), from the statsmodels package. The reason being is that we need differencing only if the series is non-stationary. Else, no differencing is needed, that is, d=0.
-# The null hypothesis (Ho) of the ADF test is that the time series is non-stationary. So, if the p-value of the test is less than the significance level (0.05) then we reject the null hypothesis and infer that the time series is indeed stationary.
-# So, in our case, if P Value > 0.05 we go ahead with finding the order of differencing.
-# 
-# A similar analysis has already been made in the paragraph "3.4. Stationarity check" above
+# Accedemos a los datasets resultantes
+train <- data$train
+valid <- data$valid
+test <- data$test
+train_valid <- data$train_valid
 
 
 
 
-
-###### prophet
+# PROPHET
 # Results of all models
 result <- data.frame(
   name_model = character(),
@@ -249,13 +224,11 @@ result <- data.frame(
   ypred = I(list())
 )
 
-################ functions required
-# Function to calculate metrics
+# FUNCIONES REQUERIDAS
+# Funcion para calcular metricas
 calc_metrics <- function(type_score, list_true, list_pred) {
   # Calculation score with type=type_score for list_true and list_pred 
-  if (type_score == 'r2_score') {
-    score <- cor(list_true, list_pred)^2
-  } else if (type_score == 'rmse') {
+  if (type_score == 'rmse') {
     score <- sqrt(mean((list_true - list_pred)^2))
   } else if (type_score == 'mape') {
     score <- mean(abs((list_true - list_pred) / list_true)) * 100
@@ -263,47 +236,41 @@ calc_metrics <- function(type_score, list_true, list_pred) {
   return(score)
 }
 
-# Function to add metrics to the result dataframe
+# Funcion que agrega las metricas al dataset resultante
 result_add_metrics <- function(result, n, y_true, y_pred) {
-  # Calculation and addition metrics into dataframe result[n, :]
-  
-  result[n, 'r2_score'] <- calc_metrics('r2_score', y_true, y_pred)
+  # Cálculo y adición de métricas al dataset result[n, :].
+
+  #result[n, 'r2_score'] <- calc_metrics('r2_score', y_true, y_pred)
   result[n, 'rmse'] <- calc_metrics('rmse', y_true, y_pred)      # in coins
   result[n, 'mape'] <- calc_metrics('mape', y_true, y_pred)  # in %
-  
+
   return(result)
 }
 
 
-################
-#install.packages('prophet')
-library(prophet)
 cryptocurrency <- 'BTCUSDT'
-holidays_df <- NULL
+name_model <- 'Prophet'
 prophet_modeling <- function(result, 
                              cryptocurrency, 
                              train, 
-                             test, 
-                             holidays_df, 
+                             test,
                              period_days,
                              fourier_order_seasonality,
                              forecasting_period,
                              name_model,
                              type_data) {
-  # Performs FB Prophet model training for the given train dataset, holidays_df, and seasonality_mode
-  # Performs forecasting with a period by this model, visualization, and error estimation
-  # df - dataframe with real data in the forecasting_period
-  # can be such combinations of parameters: train=train, test=valid, or train=train_valid, test=test
-  # Save results into the dataframe result
+  # Realiza el entrenamiento del modelo FB Prophet para el dataset de entrenamiento dado y seasonality_mode
+  # Realiza pronósticos con un periodo por este modelo, visualización y estimación de errores
+  # df - dataset con datos reales en el período de pronóstico
+  # Guarda los resultados en el dataset result
   
-  # Build Prophet model with parameters and structure 
+  # Construir un modelo Prophet con parámetros y estructura
   model <- prophet(
     daily.seasonality = FALSE,
     weekly.seasonality = FALSE,
     yearly.seasonality = FALSE,
     changepoint.range = 1,
     changepoint.prior.scale = 0.5,
-    holidays = holidays_df,
     seasonality.mode = 'multiplicative'
   )
   
@@ -316,49 +283,55 @@ prophet_modeling <- function(result,
     prior.scale = 0.5
   )
   
-  # Training model for df
+  # Entrenamiento
   model <- fit.prophet(model, train)
   
-  # Make a forecast
+  # Hacer una prediccion
   future <- make_future_dataframe(model, periods = forecasting_period)
   forecast <- predict(model, future)
+  print(forecast)
+
   
-  # Draw plot of the values with forecasting data
-  plot(model, forecast, xlabel = 'Date', ylabel = paste0(name_model, " for ", cryptocurrency))
+  # Dibuja el gráfico de los valores con datos de pronóstico
+  plot_result <- plot(model, forecast, xlabel = 'Date', ylabel = paste0(name_model, " for ", cryptocurrency))
+  print(plot_result)
   
-  # Draw plot with the components (trend and seasonalities) of the forecasts
-  plot(model, forecast, components = c('trend', 'seasonal'))
-  
-  # Output the prediction for the next time on forecasted_days
-  # forecast[['yhat_lower', 'yhat', 'yhat_upper']] = forecast[['yhat_lower', 'yhat', 'yhat_upper']].round(1)
-  # forecast[['ds', 'yhat_lower', 'yhat', 'yhat_upper']].tail(forecasting_period)
-  
-  # Forecasting data by the model
+  # Pronosticar datos con el modelo
+  forecast_ds <- forecast$ds[(nrow(forecast) - forecasting_period + 1):nrow(forecast)]
   ypred <- forecast$yhat[(nrow(forecast) - forecasting_period + 1):nrow(forecast)]
-  print(ypred)
-  # Save results
-  n <- nrow(result)
-  result[n, 'name_model'] <- paste0("Prophet_", name_model)
-  result[n, 'type_data'] <- type_data
-  result[n, 'params'] <- c(period_days, fourier_order_seasonality)
-  result[n, 'ypred'] <- ypred
   
-  #return(list(result = result, ypred = ypred))
+
+  # Guarda los resultados
+  n <- nrow(result)
+  new_row <- data.frame(
+    name_model = paste0("Prophet_", name_model),
+    type_data = type_data,
+    params = c(period_days, fourier_order_seasonality),
+    ypred = ypred,
+    ytrue = test$y
+  )
+
+  # agrega new_row al dataset
+  result <- rbind(result, new_row)
+  print(result)
   return (result)
 }
 
 
 
 is_Prophet <- TRUE
+# Convertimos 'test$y' a numerico
+test$y <- as.numeric(test$y)
+test <- test[1:(nrow(test) - 1), , drop = FALSE]
+valid$y <- as.numeric(valid$y)
 
 if (is_Prophet) {
-  for (period_days in c(4, 5, 7, 14)) {
+  for (period_days in c(4, 5, 7, 14, 30)) {
     for (fourier_order_seasonality in c(3, 12)) {
       result <- prophet_modeling(result,
                                  cryptocurrency,
                                  train,
                                  valid,
-                                 holidays_df,
                                  period_days,
                                  fourier_order_seasonality,
                                  forecasting_days,
@@ -367,3 +340,83 @@ if (is_Prophet) {
     }
   }
 }
+
+# Crea un dataframe vacio para almacenar los resultados
+unique_models <- unique(result$name_model)
+result_df <- data.frame(matrix(ncol = 4, nrow = length(unique_models)))
+colnames(result_df) <- c("name_model","data", "rmse", "mape") #"r2_score",
+
+# Recorre cada modelo único
+for (i in seq_along(unique_models)) {
+  model <- unique_models[i]
+  subset_data <- result[result$name_model == model, ]
+  
+  # Calcula las metricas
+  y_true <- subset_data$ytrue
+  y_pred <- subset_data$ypred
+  data <- 'valid'
+  metrics <- c(#calc_metrics('r2_score', y_true, y_pred),
+               calc_metrics('rmse', y_true, y_pred),
+               calc_metrics('mape', y_true, y_pred))
+  
+  # Agrega las metricas al resultado
+  result_df[i, ] <- c(model, data, metrics)
+}
+
+# Muestra el dataframe resultante
+print(result_df)
+
+
+# Testeando el modelo con los hiperparametros optimos
+
+test_result <- data.frame(
+  name_model = character(),
+  type_data = character(),
+  rmse = numeric(),
+  mape = numeric(),
+  params = I(list()),
+  ypred = I(list())
+)
+
+test_result <- prophet_modeling(test_result,
+                           cryptocurrency,
+                           train_valid,
+                           test,
+                           14,
+                           12,
+                           forecasting_days,
+                           paste0(period_days, "_days_", fourier_order_seasonality, "_order"),
+                           'test')
+
+model <- unique(test_result$name_model)
+test_result_df <- data.frame(matrix(ncol = 4, nrow = 1))
+colnames(test_result_df) <- c("name_model", "data", "rmse", "mape")
+subset_data <- test_result[test_result$name_model == model, ]
+
+# Calculamos las metricas
+y_true <- subset_data$ytrue
+y_pred <- subset_data$ypred
+data <- 'test'
+metrics <- c(#calc_metrics('r2_score', y_true, y_pred),
+              calc_metrics('rmse', y_true, y_pred),
+              calc_metrics('mape', y_true, y_pred))
+
+# Agregamos las metricas al dataframe
+test_result_df[1, ] <- c(model, data, metrics)
+print(test_result_df)
+
+
+
+# Y vs Yhat
+# Agregamos la columna ypred al df test
+test <- cbind(test, ypred = test_result$ypred)
+
+# Generamos el grafico
+plot <- plot_ly(test, x = ~ds)
+plot <- add_trace(plot, y = ~y, type = 'scatter', mode = 'markers', name = 'y', marker = list(color = 'green'))
+plot <- add_trace(plot, y = ~ypred, type = 'scatter', mode = 'markers', name = 'ypred', marker = list(color = 'red'))
+# Cambiamos el layout
+plot <- layout(plot, title = "Actual vs Predicted", xaxis = list(title = "Date"), yaxis = list(title = "Value"))
+plot
+
+dev.off()
